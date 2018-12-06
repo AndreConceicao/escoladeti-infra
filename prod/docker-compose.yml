@@ -1,0 +1,142 @@
+version: '3'
+services:
+  # Watchtower
+  watchtower:
+    image: v2tec/watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: "--no-pull --label-enable --interval 60"
+    restart: unless-stopped
+
+  # Jenkins
+  jenkins:
+    build: jenkins
+    volumes:
+     - ./jenkins/jenkins_home:/var/jenkins_home
+     - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    networks:
+      - gohorse
+    labels:
+      - "traefik.enable=true"
+      - "traefik.frontend.rule=Host:jenkins.gohorseapp.tk"
+
+  # traefik
+  proxy:
+    image: traefik:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./traefik/traefik.toml:/etc/traefik/traefik.toml:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    networks:
+      - gohorse
+    depends_on:
+      - frontend
+      - backend
+      - jenkins
+      - graylog
+
+  # nginx
+  frontend:
+    image: "com.xgh/gohorse-frontend"
+    restart: unless-stopped
+    networks:
+      - gohorse
+    depends_on:
+      - backend
+    labels:
+      - "traefik.enable=true"
+      - "traefik.frontend.rule=Host:gohorseapp.tk"
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # PostgreSQL
+  database:
+    image: "postgres:alpine"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    command: "postgres -c 'config_file=/etc/postgresql/postgresql.conf'"
+    environment:
+      POSTGRES_PASSWORD: "vaicavalo"
+      POSTGRES_USER: "gohorse"
+      POSTGRES_DB: "gohorse"
+    restart: unless-stopped
+    networks:
+      - gohorse
+
+  # Java
+  backend:
+    image: "com.xgh/gohorse-backend"
+    restart: unless-stopped
+    networks:
+      - gohorse
+    depends_on:
+      - database
+    labels:
+      - "traefik.enable=true"
+      - "traefik.frontend.rule=Host:api.gohorseapp.tk"
+      - "traefik.port=8084"
+      - "com.centurylinklabs.watchtower.enable=true"
+    environment:
+      spring_profiles_active: prod
+
+  # MongoDB
+  mongo:
+    image: mongo:3
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+    networks:
+      - gohorse
+
+  # Elasticsearch
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:5.6.8
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    environment:
+      - http.host=0.0.0.0
+      - transport.host=localhost
+      - network.host=0.0.0.0
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    restart: unless-stopped
+    networks:
+      - gohorse
+
+  # Graylog
+  graylog:
+    image: graylog/graylog:2.4
+    volumes:
+      - graylog_journal:/usr/share/graylog/data/journal
+      - ./graylog/config:/usr/share/graylog/data/config
+    restart: unless-stopped
+    networks:
+      - gohorse
+    depends_on:
+      - elasticsearch
+      - mongo
+    labels:
+      - "traefik.enable=true"
+      - "traefik.frontend.rule=Host:graylog.gohorseapp.tk"
+
+# Volumes for persisting data
+volumes:
+  postgres_data:
+    driver: local
+  mongo_data:
+    driver: local
+  es_data:
+    driver: local
+  graylog_journal:
+    driver: local
+
+networks:
+  gohorse:
